@@ -3,6 +3,8 @@
 **Jupyter Annotation Tool (ipynbd)** lets you **draw annotations directly on top of notebook cells** — using your mouse or stylus (including Apple Pencil).  
 It’s designed for teaching, demos, and visual note-taking inside `.ipynb` notebooks, while keeping all drawings stored in notebook metadata.
 
+![teaser](./teaser_gif.gif)
+
 ---
 
 ## 🚀 Current Status
