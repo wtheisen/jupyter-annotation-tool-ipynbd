@@ -15,6 +15,7 @@ It’s designed for teaching, demos, and visual note-taking inside `.ipynb` note
 - Clicking the button toggles a **canvas overlay** for the **active cell**, where drawings are rendered.  
 - Drawings persist in the notebook under `cell.metadata.overlay_v1`.  
 - Fully integrated with JupyterLab’s reactive layout (auto-resizes with cells, supports zoom, dark mode, etc.).  
+- Live annotation in shared sessions (--collaborative)
 
 🧩 **Upcoming / In progress:**
 - Persistent per-cell draw toggle and global “annotation mode”.
@@ -25,7 +26,6 @@ It’s designed for teaching, demos, and visual note-taking inside `.ipynb` note
 - Exportable to PDF/HTML
 - Generally Better UI/UX
 - Integration beyond Jupyterlab (primarily vscode)
-- Live annotation in shared sessions
 - Annotation layers
 - Auto-theme color sync
 - Optional cell grid/line/dot underlays

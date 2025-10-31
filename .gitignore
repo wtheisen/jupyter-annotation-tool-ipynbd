@@ -46,3 +46,4 @@ coverage.xml
 # Misc project-specific
 /tmp/
 build.sh
+.jupyter_ystore.db

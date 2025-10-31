@@ -254,20 +254,50 @@ const plugin: JupyterFrontEndPlugin<void> = {
           let lastErasePoint: [number, number] | null = null;
 
           type OverlayMeta = { strokes?: Stroke[]; [key: string]: unknown };
+          const getSharedModel = (): any => (cell.model as any)?.sharedModel ?? null;
+          const cloneOverlay = <T>(input: T): T => {
+            if (typeof structuredClone === 'function') {
+              try {
+                return structuredClone(input);
+              } catch (err) {
+                /* ignore structuredClone failure */
+              }
+            }
+            try {
+              return JSON.parse(JSON.stringify(input));
+            } catch (err) {
+              return input;
+            }
+          };
           const readMeta = (): OverlayMeta => {
+            const shared = getSharedModel();
+            if (shared && typeof shared.getMetadata === 'function') {
+              const sharedValue = shared.getMetadata(META_KEY) as OverlayMeta | undefined;
+              if (sharedValue && typeof sharedValue === 'object') {
+                return cloneOverlay(sharedValue);
+              }
+            }
             if (typeof cell.model.getMetadata === 'function') {
               const value = cell.model.getMetadata(META_KEY) as OverlayMeta | undefined;
               if (value && typeof value === 'object') {
-                return value;
+                return cloneOverlay(value);
               }
             }
             return { strokes: [] };
           };
           const writeMeta = (value: OverlayMeta) => {
+            const shared = getSharedModel();
+            const payload = cloneOverlay(value);
+            if (shared && typeof shared.setMetadata === 'function') {
+              shared.setMetadata(META_KEY, payload);
+              return;
+            }
             if (typeof cell.model.setMetadata === 'function') {
-              cell.model.setMetadata(META_KEY, value);
+              cell.model.setMetadata(META_KEY, payload);
             }
           };
+
+          const sharedModelRef = getSharedModel();
 
           const fit = () => {
             const r = content.getBoundingClientRect();
@@ -859,6 +889,13 @@ const plugin: JupyterFrontEndPlugin<void> = {
               colorInputRef = widthInputRef = null;
               floatingBtn?.remove();
               floatingBtn = undefined;
+              if (sharedModelRef && typeof sharedModelRef.metadataChanged?.disconnect === 'function') {
+                try {
+                  sharedModelRef.metadataChanged.disconnect(onMetadataChanged);
+                } catch (err) {
+                  /* ignore disconnect errors */
+                }
+              }
             });
           }
 
@@ -1018,6 +1055,10 @@ const plugin: JupyterFrontEndPlugin<void> = {
             (cell.model as any).metadataChanged.connect(onMetadataChanged);
           } else if ((cell.model.metadata as any)?.changed?.connect) {
             (cell.model.metadata as any).changed.connect(onMetadataChanged);
+          }
+
+          if (sharedModelRef && typeof sharedModelRef.metadataChanged?.connect === 'function') {
+            sharedModelRef.metadataChanged.connect(onMetadataChanged);
           }
 
           new ResizeObserver(fit).observe(content);
