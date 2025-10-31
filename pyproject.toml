@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jupyter-annotation-tool-ipynbd"
-version = "0.1.5"
+version = "0.1.6"
 description = "Draw, highlight, and erase annotations directly on JupyterLab notebook cells."
 readme = "README.md"
 requires-python = ">=3.9"
