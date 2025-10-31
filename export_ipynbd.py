@@ -10,7 +10,7 @@ and preserve common rich outputs (PNG/JPEG/SVG/HTML/text).
   they will appear in HTML but may need internet-free assets you can inline later.
 
 Usage:
-  python export_overlay_exact.py input.ipynb --html out.html [--pdf out.pdf]
+  python export_ipynbd.py input.ipynb --html out.html [--pdf out.pdf]
 """
 from __future__ import annotations
 
@@ -18,9 +18,11 @@ import argparse
 import base64
 import json
 import os
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import nbformat
 from nbformat.notebooknode import NotebookNode
@@ -40,12 +42,23 @@ except Exception:
 html_formatter = HtmlFormatter(nowrap=False, full=False, cssclass="codehilite")
 
 @dataclass
+class StrokeBasis:
+    width: Optional[float] = None
+    height: Optional[float] = None
+    min_y: Optional[float] = None
+    max_y: Optional[float] = None
+    anchor_line: Optional[int] = None
+    anchor_line_top: Optional[float] = None
+
+
+@dataclass
 class Stroke:
     tool: str
     color: str
     width: float   # normalized to wrapper width
     alpha: float
     points: List[Tuple[float, float]]  # normalized points
+    basis: Optional[StrokeBasis] = None
 
 
 def escape_html(s: str) -> str:
@@ -57,6 +70,7 @@ def extract_strokes(meta: Dict[str, Any]) -> List[Stroke]:
     out: List[Stroke] = []
     for st in ov.get("strokes", []):
         pts = st.get("points", []) or []
+        basis_dict = st.get("basis") or {}
         out.append(
             Stroke(
                 tool=st.get("tool", "pen"),
@@ -64,44 +78,93 @@ def extract_strokes(meta: Dict[str, Any]) -> List[Stroke]:
                 width=float(st.get("width", 0.003)),
                 alpha=float(st.get("alpha", 1.0)),
                 points=[(float(x), float(y)) for x, y in pts],
+                basis=StrokeBasis(
+                    width=_safe_float(basis_dict.get("width")),
+                    height=_safe_float(basis_dict.get("height")),
+                    min_y=_safe_float(basis_dict.get("minY")),
+                    max_y=_safe_float(basis_dict.get("maxY")),
+                    anchor_line=_safe_int(basis_dict.get("anchorLine")),
+                    anchor_line_top=_safe_float(basis_dict.get("anchorLineTop")),
+                ) if basis_dict else None,
             )
         )
     return out
 
 
-def strokes_to_svg_normalized(strokes: List[Stroke]) -> str:
-    """
-    Build an SVG that fills its parent (100% x 100%) while keeping strokes aligned
-    to the parent's pixel box. We draw in a 1000x1000 viewBox so normalized points
-    map to that grid; CSS scales to the wrapper size.
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def strokes_to_svg_absolute(strokes: List[Stroke]) -> Tuple[str, float, float]:
+    """Render strokes into an SVG sized to the recorded canvas dimensions.
+
+    Returns the SVG markup and its intrinsic width/height in CSS pixels.
     """
     if not strokes:
-        return ""
-    vb = 1000.0
+        return "", 0.0, 0.0
+
+    default_dim = 1000.0
+    width = max((s.basis.width if s.basis and s.basis.width else 0.0) for s in strokes)
+    height = max((s.basis.height if s.basis and s.basis.height else 0.0) for s in strokes)
+    if width <= 0:
+        width = default_dim
+    if height <= 0:
+        height = default_dim
+
     parts = [
         '<svg xmlns="http://www.w3.org/2000/svg" '
         'class="overlay-svg" '
         'preserveAspectRatio="none" '
-        f'viewBox="0 0 {int(vb)} {int(vb)}">'
+        f'viewBox="0 0 {width:.2f} {height:.2f}" '
+        f'width="{width:.2f}" height="{height:.2f}">'
     ]
+
     for s in strokes:
         if not s.points:
             continue
-        d = []
-        for i, (nx, ny) in enumerate(s.points):
-            x = nx * vb
-            y = ny * vb
-            d.append(("M" if i == 0 else "L") + f" {x:.2f} {y:.2f}")
-        opacity = (0.3 if s.tool == "highlighter" else 1.0) if s.alpha is None else s.alpha
-        # width is normalized to parent width: convert to the 1000-wide viewBox
-        stroke_w = max(1.0, s.width * vb)
+
+        basis_w = s.basis.width if s.basis and s.basis.width else width
+        basis_h = s.basis.height if s.basis and s.basis.height else height
+        if basis_w <= 0:
+            basis_w = width
+        if basis_h <= 0:
+            basis_h = height
+        scale_x = width / basis_w
+        scale_y = height / basis_h
+
+        stroke_width_px = max(1.0, s.width * basis_w) * scale_x
+        opacity = s.alpha if s.alpha is not None else (0.3 if s.tool == "highlighter" else 1.0)
+        commands = []
+        for idx, (nx, ny) in enumerate(s.points):
+            x = nx * basis_w * scale_x
+            y = ny * basis_h * scale_y
+            commands.append(("M" if idx == 0 else "L") + f" {x:.2f} {y:.2f}")
+
+        if not commands:
+            continue
+
         parts.append(
-            f'<path d="{" ".join(d)}" fill="none" '
+            f'<path d="{" ".join(commands)}" fill="none" '
             f'stroke="{s.color or "#000"}" stroke-linecap="round" stroke-linejoin="round" '
-            f'stroke-opacity="{opacity:.3f}" stroke-width="{stroke_w:.2f}"/>'
+            f'stroke-opacity="{opacity:.3f}" stroke-width="{stroke_width_px:.2f}"/>'
         )
+
     parts.append("</svg>")
-    return "".join(parts)
+    return "".join(parts), width, height
 
 
 def render_markdown(md: str) -> str:
@@ -235,8 +298,12 @@ h1,h2,h3 { margin-top: 1.6em; }
 }
 .cell-body { padding: 0; }
 .input-wrapper {
-  position: relative; /* anchor for overlay */
+  position: relative;
+}
+.input-body {
   padding: 16px;
+  position: relative;
+  z-index: 1;
 }
 .codehilite {
   background: #f7f7f9;
@@ -246,7 +313,17 @@ h1,h2,h3 { margin-top: 1.6em; }
 }
 .overlay-abs {
   position: absolute;
-  inset: 16px; /* match .input-wrapper padding so overlay covers content box */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 2;
+  border-radius: inherit;
+}
+.overlay-surface {
+  position: absolute;
   pointer-events: none;
 }
 .overlay-svg {
@@ -305,7 +382,15 @@ def export_html(ipynb_path: str, html_path: str) -> None:
         # Overlay HTML (absolute over input wrapper)
         overlay_html = ""
         if strokes:
-            overlay_html = f"<div class='overlay-abs'>{strokes_to_svg_normalized(strokes)}</div>"
+            svg_markup, ow, oh = strokes_to_svg_absolute(strokes)
+            if svg_markup:
+                overlay_html = (
+                    "<div class='overlay-abs'>"
+                    f"  <div class='overlay-surface' style='top:16px; left:16px; width:{ow:.2f}px; height:{oh:.2f}px'>"
+                    f"    {svg_markup}"
+                    "  </div>"
+                    "</div>"
+                )
 
         # Render outputs (rich)
         outputs_block = ""
@@ -322,7 +407,7 @@ def export_html(ipynb_path: str, html_path: str) -> None:
             f"  </div>"
             f"  <div class='cell-body'>"
             f"    <div class='input-wrapper'>"
-            f"      {input_html}"
+            f"      <div class='input-body'>{input_html}</div>"
             f"      {overlay_html}"
             f"    </div>"
             f"    {outputs_block}"
@@ -340,10 +425,66 @@ def export_html(ipynb_path: str, html_path: str) -> None:
 
 
 def export_pdf(html_path: str, pdf_path: str) -> None:
-    if WeasyHTML is None:
-        raise RuntimeError("WeasyPrint not installed. `pip install weasyprint` (plus Cairo/Pango libs) "
-                           "or export via your browser's Print to PDF.")
-    WeasyHTML(filename=html_path).write_pdf(pdf_path)
+    html_path = os.path.abspath(html_path)
+    pdf_path = os.path.abspath(pdf_path)
+    pdf_dir = os.path.dirname(pdf_path)
+    if pdf_dir:
+        os.makedirs(pdf_dir, exist_ok=True)
+
+    if WeasyHTML is not None:
+        try:
+            WeasyHTML(filename=html_path).write_pdf(pdf_path)
+            return
+        except Exception:
+            pass
+
+    cli = shutil.which("weasyprint")
+    if cli:
+        try:
+            subprocess.run([cli, html_path, pdf_path], check=True)
+            return
+        except subprocess.CalledProcessError:
+            pass
+
+    chrome_candidates = [
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+        "chrome",
+        "msedge",
+        "microsoft-edge",
+        "microsoft-edge-dev",
+        "microsoft-edge-beta",
+        "brave",
+        "brave-browser"
+    ]
+    for cmd in chrome_candidates:
+        binary = shutil.which(cmd)
+        if not binary:
+            continue
+        try:
+            subprocess.run(
+                [
+                    binary,
+                    "--headless",
+                    "--disable-gpu",
+                    f"--print-to-pdf={pdf_path}",
+                    f"file://{html_path}"
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        except subprocess.CalledProcessError:
+            continue
+
+    raise RuntimeError(
+        "Couldn't render PDF automatically. Install WeasyPrint (`pip install weasyprint` plus Cairo/Pango) "
+        "or ensure a headless Chromium compatible browser is available (e.g. `brew install chromium`). "
+        "You can also open the exported HTML in a browser and use Print→Save as PDF."
+    )
 
 
 def main():

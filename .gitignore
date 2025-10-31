@@ -23,6 +23,7 @@ build/
 .venv/
 venv/
 */.venv/
+.jlab-env/
 
 # Jupyter artifacts
 .ipynb_checkpoints/
@@ -45,4 +46,3 @@ coverage.xml
 # Misc project-specific
 /tmp/
 build.sh
-

@@ -34,6 +34,7 @@ type OverlayState = {
   setEraser?: (on: boolean) => void;
 };
 const META_KEY = 'overlay_v1';
+const BASE_ERASER_RADIUS = 0.015;
 
 const activeOverlays = new Set<OverlayState>();
 let stylesInjected = false;
@@ -248,6 +249,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
           let down = false;
           let current: Stroke | null = null;
+          let erasingActive = false;
+          let erasingPointerId: number | null = null;
+          let lastErasePoint: [number, number] | null = null;
 
           type OverlayMeta = { strokes?: Stroke[]; [key: string]: unknown };
           const readMeta = (): OverlayMeta => {
@@ -286,81 +290,40 @@ const plugin: JupyterFrontEndPlugin<void> = {
             const H = canvas.clientHeight || 1;
             const basisWidth = s.basis?.width && s.basis.width > 0 ? s.basis.width : W;
             const basisHeight = s.basis?.height && s.basis.height > 0 ? s.basis.height : H;
-            const minY = Math.min(Math.max(s.basis?.minY ?? 0, 0), 1);
-            const maxY = Math.min(Math.max(s.basis?.maxY ?? 1, 0), 1);
-
-            const topH0 = minY * basisHeight;
-            const strokeH0 = Math.max((maxY - minY) * basisHeight, 0);
-            const bottomH0 = Math.max(basisHeight - topH0 - strokeH0, 0);
-
-            let topH = topH0;
-            let strokeH = strokeH0;
-            let bottomH = bottomH0;
-
-            let extra = H - basisHeight;
-            if (extra >= 0) {
-              bottomH += extra;
-            } else {
-              let deficit = -extra;
-              const takeBottom = Math.min(bottomH, deficit);
-              bottomH -= takeBottom;
-              deficit -= takeBottom;
-              const takeTop = Math.min(topH, deficit);
-              topH -= takeTop;
-              deficit -= takeTop;
-              if (deficit > 0) {
-                strokeH = Math.max(1, strokeH - deficit);
-              }
-            }
+            const actualWidth = basisWidth;
+            const actualHeight = basisHeight;
 
             let deltaY = 0;
             const anchorLine = s.basis?.anchorLine;
             const anchorLineTopNorm = s.basis?.anchorLineTop;
             if (
+              H >= actualHeight &&
               anchorLine !== undefined &&
               anchorLineTopNorm !== undefined &&
               cell.editor
             ) {
-              const editorHost = (cell.editorWidget?.node ?? (cell.editor as any)?.host) as HTMLElement | undefined;
-              if (editorHost) {
-                const lineCoord = cell.editor.getCoordinateForPosition({
-                  line: anchorLine,
-                  column: 0
-                });
-                if (lineCoord) {
-                  const contentRect = content.getBoundingClientRect();
-                  const newTop = lineCoord.top - contentRect.top;
-                  const originalTop = anchorLineTopNorm * basisHeight;
-                  deltaY = newTop - originalTop;
-                }
+              const lineCoord = cell.editor.getCoordinateForPosition({
+                line: anchorLine,
+                column: 0
+              });
+              if (lineCoord) {
+                const contentRect = content.getBoundingClientRect();
+                const newTop = lineCoord.top - contentRect.top;
+                const originalTop = anchorLineTopNorm * actualHeight;
+                deltaY = newTop - originalTop;
               }
             }
 
-            const scaleX = W / basisWidth;
-
             ctx.save();
             ctx.globalAlpha = s.tool === 'highlighter' ? (s.alpha ?? 0.3) : 1;
-            ctx.lineWidth = s.width * W;
+            ctx.lineWidth = s.width * actualWidth;
             ctx.strokeStyle = s.color;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             ctx.beginPath();
             s.points.forEach(([nx, ny], i) => {
-              const x = nx * basisWidth * scaleX;
-              let yPx: number;
-              if (ny <= minY) {
-                const ratio = minY > 0 ? ny / minY : 0;
-                yPx = ratio * topH;
-              } else if (ny >= maxY) {
-                const denom = 1 - maxY;
-                const ratio = denom > 0 ? (ny - maxY) / denom : 0;
-                yPx = topH + strokeH + ratio * bottomH;
-              } else {
-                const span = maxY - minY;
-                const ratio = span > 0 ? (ny - minY) / span : 0;
-                yPx = topH + ratio * strokeH;
-              }
-              const y = Math.max(0, Math.min(H, yPx + deltaY));
+              const x = nx * actualWidth;
+              const y = ny * actualHeight + deltaY;
               i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
             });
             ctx.stroke();
@@ -588,6 +551,16 @@ const plugin: JupyterFrontEndPlugin<void> = {
           };
 
           const setEraser = (on: boolean) => {
+            if (erasingPointerId !== null && canvas.hasPointerCapture(erasingPointerId)) {
+              canvas.releasePointerCapture(erasingPointerId);
+            }
+            erasingActive = false;
+            erasingPointerId = null;
+            lastErasePoint = null;
+            if (on) {
+              down = false;
+              current = null;
+            }
             erasing = on;
             if (overlayState) {
               overlayState.erasing = on;
@@ -634,31 +607,159 @@ const plugin: JupyterFrontEndPlugin<void> = {
             }
           };
 
-          const hitTestStroke = (point: [number, number], strokes: Stroke[]) => {
-            const [px, py] = point;
-            for (let i = strokes.length - 1; i >= 0; i--) {
-              const stroke = strokes[i];
-              let minX = 1;
-              let maxX = 0;
-              let minYStroke = 1;
-              let maxYStroke = 0;
-              stroke.points.forEach(([sx, sy]) => {
-                if (sx < minX) minX = sx;
-                if (sx > maxX) maxX = sx;
-                if (sy < minYStroke) minYStroke = sy;
-                if (sy > maxYStroke) maxYStroke = sy;
+          const distanceSquared = (a: [number, number], b: [number, number]) => {
+            const dx = a[0] - b[0];
+            const dy = a[1] - b[1];
+            return dx * dx + dy * dy;
+          };
+
+          const pointToSegmentDistanceSquared = (
+            p: [number, number],
+            a: [number, number],
+            b: [number, number]
+          ) => {
+            if (a[0] === b[0] && a[1] === b[1]) {
+              return distanceSquared(p, a);
+            }
+            const vx = b[0] - a[0];
+            const vy = b[1] - a[1];
+            const wx = p[0] - a[0];
+            const wy = p[1] - a[1];
+            const c1 = vx * wx + vy * wy;
+            const c2 = vx * vx + vy * vy;
+            const t = Math.max(0, Math.min(1, c1 / c2));
+            const proj: [number, number] = [a[0] + t * vx, a[1] + t * vy];
+            return distanceSquared(p, proj);
+          };
+
+          const segmentDistanceSquared = (
+            a1: [number, number],
+            a2: [number, number],
+            b1: [number, number],
+            b2: [number, number]
+          ) => {
+            return Math.min(
+              pointToSegmentDistanceSquared(a1, b1, b2),
+              pointToSegmentDistanceSquared(a2, b1, b2),
+              pointToSegmentDistanceSquared(b1, a1, a2),
+              pointToSegmentDistanceSquared(b2, a1, a2)
+            );
+          };
+
+          const eraseWithPointer = (
+            point: [number, number],
+            previous?: [number, number] | null
+          ) => {
+            const meta = readMeta();
+            const strokes = Array.isArray(meta.strokes) ? meta.strokes : [];
+            const pointerSegment = previous ? [previous, point] as [[number, number], [number, number]] : null;
+            let modified = false;
+            const nextStrokes: Stroke[] = [];
+
+            const radiusForStroke = (stroke: Stroke) => {
+              const width = stroke.width ?? 0.003;
+              return Math.max(BASE_ERASER_RADIUS, width * 6);
+            };
+
+            for (const stroke of strokes) {
+              const pts = Array.isArray(stroke.points) ? stroke.points : [];
+              if (pts.length === 0) {
+                nextStrokes.push(stroke);
+                continue;
+              }
+
+              const radius = radiusForStroke(stroke);
+              const radiusSq = radius * radius;
+
+              const keepPoint = (pt: [number, number]) => {
+                if (distanceSquared(pt, point) <= radiusSq) {
+                  return false;
+                }
+                if (previous && distanceSquared(pt, previous) <= radiusSq) {
+                  return false;
+                }
+                if (pointerSegment) {
+                  if (pointToSegmentDistanceSquared(pt, pointerSegment[0], pointerSegment[1]) <= radiusSq) {
+                    return false;
+                  }
+                }
+                return true;
+              };
+
+              const newSegments: [number, number][][] = [];
+              let currentSegment: [number, number][] = [];
+              let strokeModified = false;
+
+              pts.forEach(pt => {
+                const keep = keepPoint(pt);
+                if (!keep) {
+                  if (currentSegment.length > 1) {
+                    newSegments.push(currentSegment);
+                  }
+                  currentSegment = [];
+                  strokeModified = true;
+                  return;
+                }
+
+                if (currentSegment.length === 0) {
+                  currentSegment.push(pt);
+                  return;
+                }
+
+                const prevPt = currentSegment[currentSegment.length - 1];
+                const crosses = pointerSegment
+                  ? segmentDistanceSquared(prevPt, pt, pointerSegment[0], pointerSegment[1]) <= radiusSq
+                  : false;
+                if (crosses) {
+                  if (currentSegment.length > 1) {
+                    newSegments.push(currentSegment);
+                  }
+                  currentSegment = [pt];
+                  strokeModified = true;
+                  return;
+                }
+
+                currentSegment.push(pt);
               });
-              const margin = (stroke.width ?? 0.003) * 4;
-              if (
-                px >= minX - margin &&
-                px <= maxX + margin &&
-                py >= minYStroke - margin &&
-                py <= maxYStroke + margin
-              ) {
-                return i;
+
+              if (currentSegment.length > 1) {
+                newSegments.push(currentSegment);
+              }
+
+              if (!strokeModified) {
+                nextStrokes.push(stroke);
+                continue;
+              }
+
+              modified = true;
+
+              if (newSegments.length === 0) {
+                continue;
+              }
+
+              for (const segment of newSegments) {
+                if (segment.length < 2) {
+                  continue;
+                }
+                const segBasis = stroke.basis
+                  ? {
+                      ...stroke.basis,
+                      minY: Math.min(...segment.map(([, y]) => y)),
+                      maxY: Math.max(...segment.map(([, y]) => y))
+                    }
+                  : undefined;
+                nextStrokes.push({
+                  ...stroke,
+                  points: segment,
+                  basis: segBasis
+                });
               }
             }
-            return -1;
+
+            if (modified) {
+              writeMeta({ ...meta, strokes: nextStrokes });
+              redraw();
+            }
           };
 
           const toggleOverlay = (force?: boolean) => {
@@ -767,18 +868,18 @@ const plugin: JupyterFrontEndPlugin<void> = {
             enforceCommandMode();
 
             if (erasing) {
-              const point = toNorm(e);
-              const meta = readMeta();
-              const strokes = Array.isArray(meta.strokes) ? [...meta.strokes] : [];
-              const hitIndex = hitTestStroke(point, strokes);
-              if (hitIndex !== -1) {
-                strokes.splice(hitIndex, 1);
-                writeMeta({ ...meta, strokes });
-                redraw();
-              }
+              const normPoint = toNorm(e);
+              erasingActive = true;
+              erasingPointerId = e.pointerId;
+              canvas.setPointerCapture(e.pointerId);
+              eraseWithPointer(normPoint, lastErasePoint);
+              lastErasePoint = normPoint;
               return;
             }
 
+            erasingActive = false;
+            erasingPointerId = null;
+            lastErasePoint = null;
             canvas.setPointerCapture(e.pointerId);
             down = true;
             const firstPoint = toNorm(e);
@@ -803,6 +904,14 @@ const plugin: JupyterFrontEndPlugin<void> = {
             });
           });
           canvas.addEventListener('pointermove', e => {
+            if (erasingActive) {
+              blockEvent(e);
+              const normPoint = toNorm(e);
+              eraseWithPointer(normPoint, lastErasePoint);
+              lastErasePoint = normPoint;
+              enforceCommandMode();
+              return;
+            }
             if (!down || !current) return;
             blockEvent(e);
             const point = toNorm(e);
@@ -857,13 +966,35 @@ const plugin: JupyterFrontEndPlugin<void> = {
               canvas.releasePointerCapture(pointerId);
             }
           };
+          const finishErasing = (pointerId?: number) => {
+            if (!erasingActive) {
+              return;
+            }
+            const id = pointerId ?? erasingPointerId;
+            if (typeof id === 'number' && canvas.hasPointerCapture(id)) {
+              canvas.releasePointerCapture(id);
+            }
+            erasingActive = false;
+            erasingPointerId = null;
+            lastErasePoint = null;
+          };
           canvas.addEventListener('pointerup', e => {
             blockEvent(e);
+            if (erasingActive) {
+              finishErasing(e.pointerId);
+              enforceCommandMode();
+              return;
+            }
             commitStroke(e.pointerId);
             enforceCommandMode();
           });
           canvas.addEventListener('pointercancel', e => {
             blockEvent(e);
+            if (erasingActive) {
+              finishErasing(e.pointerId);
+              enforceCommandMode();
+              return;
+            }
             commitStroke(e.pointerId);
             enforceCommandMode();
           });
