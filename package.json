@@ -1,0 +1,46 @@
+{
+  "name": "jupyter-annotation-tool-ipynbd",
+  "version": "0.1.0",
+  "description": "Draw, highlight, and erase annotations directly on JupyterLab notebook cells.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "author": "William Theisen",
+  "license": "BSD-3-Clause",
+  "homepage": "https://ipynbd.williamtheisen.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wtheisen/ipynb-annotation-tool.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wtheisen/ipynb-annotation-tool/issues"
+  },
+  "keywords": [
+    "jupyterlab-extension",
+    "jupyterlab",
+    "annotations",
+    "notebooks",
+    "apple-pencil",
+    "drawing"
+  ],
+  "scripts": {
+    "build": "npm run build:lib && npm run build:lab",
+    "build:lib": "tsc -p .",
+    "build:lab": "jupyter labextension build ."
+  },
+  "dependencies": {
+    "@jupyterlab/application": "^4.4.0",
+    "@jupyterlab/notebook": "^4.4.0",
+    "@jupyterlab/apputils": "^4.4.0",
+    "@jupyterlab/ui-components": "^4.4.0"
+  },
+  "devDependencies": {
+    "typescript": "5.2.2",
+    "@types/json-schema": "^7.0.15",
+    "@jupyterlab/builder": "^4.4.10"
+  },
+  "jupyterlab": {
+    "extension": true,
+    "outputDir": "labextension"
+  }
+}

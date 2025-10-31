@@ -1,0 +1,69 @@
+[build-system]
+requires = [
+  "hatchling>=1.21.1",
+  "hatch-jupyter-builder>=0.9",
+  "jupyterlab>=4,<5"
+]
+build-backend = "hatchling.build"
+
+[project]
+name = "jupyter-annotation-tool-ipynbd"
+version = "0.1.0"
+description = "Draw, highlight, and erase annotations directly on JupyterLab notebook cells."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["jupyterlab>=4,<5"]
+authors = [
+  { name = "William Theisen", email = "wtheisen@nd.edu" }
+]
+license = { file = "LICENSE" }
+keywords = [
+  "jupyter",
+  "jupyterlab",
+  "annotation",
+  "notebook",
+  "drawing",
+  "stylus"
+]
+classifiers = [
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Framework :: Jupyter",
+  "Framework :: Jupyter :: JupyterLab",
+  "License :: OSI Approved :: BSD License",
+  "Operating System :: OS Independent"
+]
+
+[project.urls]
+Homepage = "https://ipynbd.williamtheisen.com"
+Repository = "https://github.com/wtheisen/ipynb-annotation-tool"
+Issues = "https://github.com/wtheisen/ipynb-annotation-tool/issues"
+
+[tool.hatch.build]
+# Include the built front-end & the install.json
+artifacts = [
+  "labextension/**",
+  "install.json"
+]
+
+[tool.hatch.build.targets.wheel]
+# Ship the tiny Python package so the wheel isn't empty
+packages = ["jupyter_annotation_tool_ipynbd"]
+
+# (Optional) you can also restrict to just these paths:
+only-include = ["jupyter_annotation_tool_ipynbd", "labextension", "install.json"]
+
+# Copy the built assets into the JupyterLab share dir on install
+[tool.hatch.build.targets.wheel.shared-data]
+"labextension" = "share/jupyter/labextensions/jupyter-annotation-tool-ipynbd"
+"install.json" = "share/jupyter/labextensions/jupyter-annotation-tool-ipynbd/install.json"
+
+[tool.hatch.build.hooks.jupyter-builder]
+build-function = "hatch_jupyter_builder.npm_builder"
+skip-if-exists = ["labextension/package.json"]
+ensured-targets = ["labextension/package.json"]
+build-args = ["npm", ["run", "build"]]

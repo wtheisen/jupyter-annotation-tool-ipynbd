@@ -1,0 +1,5 @@
+{
+  "packageManager": "npm",
+  "packageName": "jupyter-annotation-tool-ipynbd",
+  "uninstallInstructions": "pip uninstall jupyter-annotation-tool-ipynbd"
+}

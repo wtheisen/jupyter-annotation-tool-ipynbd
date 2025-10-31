@@ -1,0 +1,48 @@
+# Node / Yarn / npm artifacts
+node_modules/
+.npmrc
+npm-debug.log*
+yarn-error.log
+pnpm-debug.log
+
+# JupyterLab build outputs
+labextension/
+lib/
+
+# Python build / packaging
+__pycache__/
+*.py[cod]
+*.egg-info/
+.dist-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.env/
+.venv/
+venv/
+*/.venv/
+
+# Jupyter artifacts
+.ipynb_checkpoints/
+.jupyterlab-workspaces/
+
+# Editor/OS cruft
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Hatch / build caches
+.hatch
+
+# Coverage / test reports
+.coverage
+pytest-cache/
+coverage.xml
+
+# Misc project-specific
+/tmp/
+build.sh
+
